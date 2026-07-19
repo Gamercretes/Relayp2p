@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, viewport-fit=cover">
+<title>Relay — a private bridge between your devices</title>
+<meta name="description" content="A private room-code bridge for clipboard text and notes between your own devices.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📡</text></svg>">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          bg: '#12161B',
+          panel: '#1A2028',
+          panel2: '#212832',
+          line: '#2B333D',
+          ink: '#ECE7DA',
+          muted: '#8A93A0',
+          signal: '#E8A33D',
+          signal2: '#C97F1F',
+          online: '#6FAE8C',
+          danger: '#C1443C',
+        },
+        fontFamily: {
+          display: ['"Space Grotesk"', 'sans-serif'],
+          mono: ['"JetBrains Mono"', 'monospace'],
+          body: ['Inter', 'sans-serif'],
+        },
+      },
+    },
+  };
+</script>
+
+<style>
+  html { background: #12161B; }
+  body { font-family: 'Inter', sans-serif; }
+  .glow { text-shadow: 0 0 18px rgba(232,163,61,0.45); }
+  .brackets { position: relative; }
+  .brackets::before, .brackets::after {
+    content: ''; position: absolute; width: 14px; height: 14px;
+    border-color: #E8A33D; opacity: .8;
+  }
+  .brackets::before { top: -1px; left: -1px; border-top: 2px solid; border-left: 2px solid; }
+  .brackets::after { bottom: -1px; right: -1px; border-bottom: 2px solid; border-right: 2px solid; }
+  .cursor-blink { animation: blink 1.1s steps(1) infinite; }
+  @keyframes blink { 0%,49% { opacity: 1 } 50%,100% { opacity: 0 } }
+  .scan { animation: scan 3s linear infinite; }
+  @keyframes scan { 0% { background-position: 0 0 } 100% { background-position: 0 40px } }
+  ::-webkit-scrollbar { width: 8px; }
+  ::-webkit-scrollbar-thumb { background: #2B333D; border-radius: 8px; }
+  .fade-in { animation: fadeIn .25s ease-out; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px) } to { opacity: 1; transform: translateY(0) } }
+</style>
+</head>
+
+<body class="bg-bg text-ink min-h-screen font-body">
+
+<div id="app" class="max-w-5xl mx-auto px-4 sm:px-6 pb-24">
+
+  <!-- Top bar -->
+  <header class="flex items-center justify-between py-6 border-b border-line/70">
+    <div class="flex items-center gap-3">
+      <span class="text-2xl">📡</span>
+      <div>
+        <h1 class="font-display font-700 text-xl tracking-tight text-signal glow">RELAY</h1>
+        <p class="text-[11px] text-muted font-mono -mt-1">device-to-device, no accounts</p>
+      </div>
+    </div>
+    <div id="roomChip" class="hidden items-center gap-2 font-mono text-xs bg-panel border border-line rounded-full px-3 py-1.5">
+      <span class="w-1.5 h-1.5 rounded-full bg-online"></span>
+      <span id="roomChipText" class="text-muted">—</span>
+    </div>
+  </header>
+
+  <!-- ONBOARDING -->
+  <section id="onboarding" class="hidden max-w-md mx-auto mt-16 fade-in">
+    <div class="brackets border border-line/60 bg-panel rounded-2xl p-8 text-center">
+      <p class="font-mono text-xs text-signal mb-2 tracking-widest">// FIRST TRANSMISSION</p>
+      <h2 class="font-display text-2xl mb-2">Name this device</h2>
+      <p class="text-sm text-muted mb-6">So items in the feed show where they came from.</p>
+      <input id="deviceNameInput" type="text" placeholder="e.g. Yash's Laptop"
+        class="w-full bg-panel2 border border-line rounded-lg px-4 py-3 text-center font-mono text-sm focus:outline-none focus:ring-2 focus:ring-signal/60 mb-4" />
+      <button id="deviceNameSave" class="w-full bg-signal hover:bg-signal2 text-bg font-display font-600 rounded-lg py-3 transition">Continue</button>
+    </div>
+  </section>
+
+  <!-- ROOM ENTRY (no room yet) -->
+  <section id="roomEntry" class="hidden max-w-md mx-auto mt-16 fade-in">
+    <div class="brackets border border-line/60 bg-panel rounded-2xl p-8 text-center">
+      <p class="font-mono text-xs text-signal mb-2 tracking-widest">// NO SIGNAL</p>
+      <h2 class="font-display text-2xl mb-2">Start or join a bridge</h2>
+      <p class="text-sm text-muted mb-6">Create a new room on this device, then scan the code on your other one.</p>
+      <button id="createRoomBtn" class="w-full bg-signal hover:bg-signal2 text-bg font-display font-600 rounded-lg py-3 transition mb-4">
+        Start New Relay
+      </button>
+      <div class="flex items-center gap-3 my-4">
+        <div class="h-px bg-line flex-1"></div><span class="text-xs text-muted font-mono">or</span><div class="h-px bg-line flex-1"></div>
+      </div>
+      <div class="flex gap-2">
+        <input id="joinCodeInput" type="text" placeholder="paste room code"
+          class="flex-1 bg-panel2 border border-line rounded-lg px-4 py-3 text-center font-mono text-sm focus:outline-none focus:ring-2 focus:ring-signal/60" />
+        <button id="joinRoomBtn" class="bg-panel2 hover:bg-line border border-line font-display font-600 rounded-lg px-5 transition">Join</button>
+      </div>
+      <p id="roomEntryError" class="hidden text-danger text-xs font-mono mt-4"></p>
+    </div>
+  </section>
+
+  <!-- MAIN APP -->
+  <main id="mainApp" class="hidden mt-8 grid grid-cols-1 lg:grid-cols-5 gap-6">
+
+    <!-- Left: Clipboard feed -->
+    <section class="lg:col-span-3 flex flex-col gap-4">
+      <div class="bg-panel border border-line rounded-2xl p-5">
+        <p class="font-mono text-xs text-signal tracking-widest mb-3">// CLIPBOARD FEED</p>
+        <textarea id="composerInput" rows="3" placeholder="Paste text, a link, code — anything…"
+          class="w-full bg-panel2 border border-line rounded-lg px-4 py-3 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-signal/60"></textarea>
+        <div class="flex items-center justify-between mt-3 gap-3">
+          <input id="searchInput" type="text" placeholder="search feed…"
+            class="flex-1 bg-transparent border border-line rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-signal/50" />
+          <button id="sendBtn" class="bg-signal hover:bg-signal2 text-bg font-display font-600 rounded-lg px-6 py-2.5 text-sm whitespace-nowrap transition">Send →</button>
+        </div>
+      </div>
+
+      <div class="bg-panel border border-line rounded-2xl p-5 flex-1 min-h-[300px]">
+        <div class="flex items-center justify-between mb-3">
+          <p class="font-mono text-xs text-signal tracking-widest">// HISTORY</p>
+          <label class="flex items-center gap-1 text-xs text-muted cursor-pointer select-none">
+            <input id="favOnlyToggle" type="checkbox" class="accent-signal" /> favorites
+          </label>
+        </div>
+        <ul id="feedList" class="space-y-2 max-h-[520px] overflow-y-auto pr-1"></ul>
+        <p id="feedEmpty" class="text-sm text-muted text-center py-10">Nothing here yet. Send something above.</p>
+      </div>
+    </section>
+
+    <!-- Right: Notepad + Room panel -->
+    <section class="lg:col-span-2 flex flex-col gap-4">
+      <div class="bg-panel border border-line rounded-2xl p-5">
+        <div class="flex items-center justify-between mb-3">
+          <p class="font-mono text-xs text-signal tracking-widest">// SHARED NOTEPAD</p>
+          <span id="noteMeta" class="text-[11px] text-muted font-mono"></span>
+        </div>
+        <textarea id="noteInput" rows="8" placeholder="A running note, synced across devices. Markdown-friendly."
+          class="w-full bg-panel2 border border-line rounded-lg px-4 py-3 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-signal/60"></textarea>
+        <button id="noteSaveBtn" class="w-full mt-3 bg-panel2 hover:bg-line border border-line font-display font-600 rounded-lg py-2.5 text-sm transition">Save &amp; Push</button>
+      </div>
+
+      <div class="brackets bg-panel border border-line rounded-2xl p-5">
+        <p class="font-mono text-xs text-signal tracking-widest mb-3">// THIS ROOM</p>
+        <div class="flex items-center justify-center bg-white rounded-xl p-3 mb-3" id="qrHolder"></div>
+        <div class="font-mono text-center text-lg tracking-[0.2em] text-signal glow mb-1" id="roomCodeDisplay">— — — —</div>
+        <p class="text-center text-[11px] text-muted mb-4">Scan with your phone's camera app to open &amp; join instantly.</p>
+        <div class="flex gap-2">
+          <button id="copyLinkBtn" class="flex-1 bg-panel2 hover:bg-line border border-line rounded-lg py-2 text-xs font-display font-600 transition">Copy Link</button>
+          <button id="syncNowBtn" class="flex-1 bg-panel2 hover:bg-line border border-line rounded-lg py-2 text-xs font-display font-600 transition">🔄 Sync Now</button>
+        </div>
+        <label class="flex items-center justify-center gap-2 mt-3 text-[11px] text-muted cursor-pointer select-none">
+          <input id="autoSyncToggle" type="checkbox" class="accent-signal" /> auto-sync every 5s
+        </label>
+        <button id="leaveRoomBtn" class="w-full mt-3 text-danger/80 hover:text-danger text-xs font-mono">leave this room</button>
+      </div>
+      <p id="syncStatus" class="text-center text-[11px] font-mono text-muted"></p>
+    </section>
+  </main>
+</div>
+
+<!-- toast -->
+<div id="toastHolder" class="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 flex flex-col gap-2 items-center"></div>
+
+<script>
+(function () {
+  const API = 'https://jsonblob.com/api/jsonBlob';
+  const LS_ROOM = 'relay_room_id';
+  const LS_DEVICE = 'relay_device_name';
+
+  const $ = (id) => document.getElementById(id);
+  const uid = () => Math.random().toString(36).slice(2, 10);
+
+  let state = { room: null, data: null, deviceName: null, pollTimer: null };
+
+  // ---------- Toast ----------
+  function toast(msg, tone = 'default') {
+    const el = document.createElement('div');
+    const colors = { default: 'border-line bg-panel2 text-ink', danger: 'border-danger/50 bg-panel2 text-danger', ok: 'border-online/50 bg-panel2 text-online' };
+    el.className = `fade-in border ${colors[tone]} rounded-full px-4 py-2 text-xs font-mono shadow-lg`;
+    el.textContent = msg;
+    $('toastHolder').appendChild(el);
+    setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity .3s'; setTimeout(() => el.remove(), 300); }, 2600);
+  }
+
+  // ---------- API ----------
+  async function apiCreate(data) {
+    const res = await fetch(API, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) throw new Error('create failed');
+    const loc = res.headers.get('Location') || '';
+    const id = loc.split('/').filter(Boolean).pop();
+    if (!id) throw new Error('no id returned');
+    return id;
+  }
+
+  async function apiGet(id) {
+    const res = await fetch(`${API}/${id}`, { headers: { Accept: 'application/json' } });
+    if (!res.ok) throw new Error(res.status === 404 ? 'notfound' : 'get failed');
+    return res.json();
+  }
+
+  async function apiPut(id, data) {
+    const res = await fetch(`${API}/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) throw new Error('save failed');
+    return true;
+  }
+
+  function emptyRoomData() {
+    return { clipboard: [], note: { content: '', device: '', ts: 0 }, updatedAt: Date.now() };
+  }
+
+  // ---------- Boot ----------
+  function boot() {
+    state.deviceName = localStorage.getItem(LS_DEVICE);
+    const url = new URL(window.location.href);
+    const urlRoom = url.searchParams.get('room');
+    const savedRoom = localStorage.getItem(LS_ROOM);
+    state.room = urlRoom || savedRoom || null;
+
+    if (!state.deviceName) {
+      show('onboarding');
+      return;
+    }
+    if (!state.room) {
+      show('roomEntry');
+      return;
+    }
+    enterRoom(state.room, /*silent*/ true);
+  }
+
+  function show(sectionId) {
+    ['onboarding', 'roomEntry', 'mainApp'].forEach((id) => $(id).classList.add('hidden'));
+    $(sectionId).classList.remove('hidden');
+  }
+
+  // ---------- Room lifecycle ----------
+  async function enterRoom(id, silent = false) {
+    try {
+      const data = await apiGet(id);
+      state.room = id;
+      state.data = data;
+      localStorage.setItem(LS_ROOM, id);
+      const url = new URL(window.location.href);
+      url.searchParams.set('room', id);
+      window.history.replaceState({}, '', url);
+      renderRoom();
+      show('mainApp');
+      $('roomChip').classList.remove('hidden');
+      $('roomChip').classList.add('flex');
+      $('roomChipText').textContent = id;
+    } catch (e) {
+      if (!silent) {
+        $('roomEntryError').textContent = 'Could not find that room. Check the code and try again.';
+        $('roomEntryError').classList.remove('hidden');
+      } else {
+        localStorage.removeItem(LS_ROOM);
+        show('roomEntry');
+      }
+    }
+  }
+
+  async function createRoom() {
+    $('createRoomBtn').textContent = 'Creating…';
+    try {
+      const id = await apiCreate(emptyRoomData());
+      await enterRoom(id);
+      toast('New relay created', 'ok');
+    } catch (e) {
+      toast('Could not create a room — check your connection', 'danger');
+      $('createRoomBtn').textContent = 'Start New Relay';
+    }
+  }
+
+  function leaveRoom() {
+    localStorage.removeItem(LS_ROOM);
+    const url = new URL(window.location.href);
+    url.searchParams.delete('room');
+    window.history.replaceState({}, '', url);
+    stopAutoSync();
+    state.room = null;
+    state.data = null;
+    show('roomEntry');
+  }
+
+  // ---------- Sync ----------
+  async function pullRoom(showToast = true) {
+    if (!state.room) return;
+    try {
+      const data = await apiGet(state.room);
+      state.data = data;
+      renderRoom();
+      setSyncStatus('synced ' + new Date().toLocaleTimeString());
+      if (showToast) toast('Synced', 'ok');
+    } catch (e) {
+      setSyncStatus('sync failed — offline?');
+      if (showToast) toast('Sync failed', 'danger');
+    }
+  }
+
+  async function pushRoom() {
+    if (!state.room || !state.data) return;
+    state.data.updatedAt = Date.now();
+    try {
+      await apiPut(state.room, state.data);
+      setSyncStatus('pushed ' + new Date().toLocaleTimeString());
+    } catch (e) {
+      toast('Could not save — will retry on next sync', 'danger');
+    }
+  }
+
+  function setSyncStatus(text) { $('syncStatus').textContent = text; }
+
+  function startAutoSync() {
+    stopAutoSync();
+    state.pollTimer = setInterval(() => pullRoom(false), 5000);
+  }
+  function stopAutoSync() {
+    if (state.pollTimer) clearInterval(state.pollTimer);
+    state.pollTimer = null;
+  }
+
+  // ---------- Render ----------
+  function detectType(text) {
+    if (/^https?:\/\/\S+$/i.test(text.trim())) return 'link';
+    if (/[{};]|function\s*\(|=>|<\/?[a-z]/i.test(text) && text.length > 40) return 'code';
+    return 'text';
+  }
+
+  function renderRoom() {
+    if (!state.data) return;
+    renderQR();
+    renderFeed();
+    renderNote();
+  }
+
+  function renderQR() {
+    $('roomCodeDisplay').textContent = state.room;
+    const holder = $('qrHolder');
+    holder.innerHTML = '';
+    const url = new URL(window.location.href);
+    url.searchParams.set('room', state.room);
+    new QRCode(holder, { text: url.toString(), width: 168, height: 168, colorDark: '#12161B', colorLight: '#ffffff' });
+  }
+
+  function renderFeed() {
+    const list = $('feedList');
+    const search = $('searchInput').value.trim().toLowerCase();
+    const favOnly = $('favOnlyToggle').checked;
+    let items = [...state.data.clipboard].sort((a, b) => b.ts - a.ts);
+    if (favOnly) items = items.filter((i) => i.favorite);
+    if (search) items = items.filter((i) => i.content.toLowerCase().includes(search));
+
+    list.innerHTML = '';
+    $('feedEmpty').classList.toggle('hidden', items.length > 0);
+
+    for (const item of items) {
+      const li = document.createElement('li');
+      li.className = 'fade-in bg-panel2 border border-line rounded-xl p-3';
+      const typeTag = item.type === 'link' ? 'LINK' : item.type === 'code' ? 'CODE' : 'TEXT';
+      const safeContent = item.content;
+      const displayLink = item.type === 'link';
+
+      li.innerHTML = `
+        <div class="flex items-start justify-between gap-2">
+          <div class="min-w-0 flex-1">
+            <div class="flex items-center gap-2 mb-1 text-[10px] font-mono text-muted">
+              <span class="px-1.5 py-0.5 rounded bg-line/70 text-signal">${typeTag}</span>
+              <span>${item.device || 'device'}</span>
+              <span>·</span>
+              <span>${new Date(item.ts).toLocaleTimeString()}</span>
+            </div>
+            <div class="text-sm break-words whitespace-pre-wrap ${displayLink ? 'text-online underline cursor-pointer' : ''}" data-action="${displayLink ? 'open' : ''}">${escapeHtml(safeContent)}</div>
+          </div>
+          <div class="flex flex-col gap-1 shrink-0">
+            <button data-act="fav" class="text-xs ${item.favorite ? 'text-signal' : 'text-muted'}" title="favorite">★</button>
+            <button data-act="copy" class="text-xs text-muted hover:text-ink" title="copy">⧉</button>
+            <button data-act="del" class="text-xs text-muted hover:text-danger" title="delete">✕</button>
+          </div>
+        </div>`;
+
+      li.querySelector('[data-act="fav"]').onclick = () => { item.favorite = !item.favorite; pushRoom(); renderFeed(); };
+      li.querySelector('[data-act="copy"]').onclick = () => { navigator.clipboard.writeText(item.content); toast('Copied'); };
+      li.querySelector('[data-act="del"]').onclick = () => {
+        state.data.clipboard = state.data.clipboard.filter((i) => i.id !== item.id);
+        pushRoom(); renderFeed();
+      };
+      if (displayLink) {
+        li.querySelector('[data-action="open"]').onclick = () => window.open(item.content, '_blank');
+      }
+      list.appendChild(li);
+    }
+  }
+
+  function escapeHtml(s) {
+    return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  function renderNote() {
+    const n = state.data.note || { content: '', device: '', ts: 0 };
+    if (document.activeElement !== $('noteInput')) $('noteInput').value = n.content;
+    $('noteMeta').textContent = n.ts ? `last edited by ${n.device || 'device'}` : '';
+  }
+
+  // ---------- Event wiring ----------
+  $('deviceNameSave').onclick = () => {
+    const v = $('deviceNameInput').value.trim();
+    if (!v) { toast('Give this device a name', 'danger'); return; }
+    localStorage.setItem(LS_DEVICE, v);
+    state.deviceName = v;
+    show('roomEntry');
+  };
+  $('deviceNameInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('deviceNameSave').click(); });
+
+  $('createRoomBtn').onclick = createRoom;
+  $('joinRoomBtn').onclick = () => {
+    const v = $('joinCodeInput').value.trim();
+    if (!v) return;
+    $('roomEntryError').classList.add('hidden');
+    enterRoom(v);
+  };
+  $('joinCodeInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('joinRoomBtn').click(); });
+
+  $('sendBtn').onclick = () => {
+    const text = $('composerInput').value.trim();
+    if (!text) return;
+    const item = { id: uid(), content: text, type: detectType(text), favorite: false, device: state.deviceName, ts: Date.now() };
+    state.data.clipboard.push(item);
+    $('composerInput').value = '';
+    pushRoom();
+    renderFeed();
+    toast('Sent to relay', 'ok');
+  };
+  $('composerInput').addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') $('sendBtn').click(); });
+
+  $('searchInput').addEventListener('input', renderFeed);
+  $('favOnlyToggle').addEventListener('change', renderFeed);
+
+  $('noteSaveBtn').onclick = () => {
+    state.data.note = { content: $('noteInput').value, device: state.deviceName, ts: Date.now() };
+    pushRoom();
+    renderNote();
+    toast('Note pushed', 'ok');
+  };
+
+  $('copyLinkBtn').onclick = () => {
+    const url = new URL(window.location.href);
+    url.searchParams.set('room', state.room);
+    navigator.clipboard.writeText(url.toString());
+    toast('Link copied');
+  };
+
+  $('syncNowBtn').onclick = () => pullRoom(true);
+
+  $('autoSyncToggle').addEventListener('change', (e) => {
+    if (e.target.checked) { startAutoSync(); toast('Auto-sync on'); }
+    else { stopAutoSync(); toast('Auto-sync off'); }
+  });
+
+  $('leaveRoomBtn').onclick = () => {
+    if (confirm('Leave this room? You can rejoin anytime with its code.')) leaveRoom();
+  };
+
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && state.room) pullRoom(false);
+  });
+
+  boot();
+})();
+</script>
+</body>
+</html>
