@@ -98,7 +98,7 @@
     <div class="brackets border border-line/60 bg-panel rounded-2xl p-8 text-center">
       <p class="font-mono text-xs text-signal mb-2 tracking-widest">// NO SIGNAL</p>
       <h2 class="font-display text-2xl mb-2">Start or join a bridge</h2>
-      <p class="text-sm text-muted mb-6">Create a new room on this device, then scan the code on your other one.</p>
+      <p class="text-sm text-muted mb-6">Create a room here, then scan its QR on your other device — no typing needed. After that, a short 4-character code works too.</p>
       <button id="createRoomBtn" class="w-full bg-signal hover:bg-signal2 text-bg font-display font-600 rounded-lg py-3 transition mb-4">
         Start New Relay
       </button>
@@ -106,7 +106,7 @@
         <div class="h-px bg-line flex-1"></div><span class="text-xs text-muted font-mono">or</span><div class="h-px bg-line flex-1"></div>
       </div>
       <div class="flex gap-2">
-        <input id="joinCodeInput" type="text" placeholder="paste room code"
+        <input id="joinCodeInput" type="text" placeholder="4-char code or paste link"
           class="flex-1 bg-panel2 border border-line rounded-lg px-4 py-3 text-center font-mono text-sm focus:outline-none focus:ring-2 focus:ring-signal/60" />
         <button id="joinRoomBtn" class="bg-panel2 hover:bg-line border border-line font-display font-600 rounded-lg px-5 transition">Join</button>
       </div>
@@ -157,7 +157,7 @@
       <div class="brackets bg-panel border border-line rounded-2xl p-5">
         <p class="font-mono text-xs text-signal tracking-widest mb-3">// THIS ROOM</p>
         <div class="flex items-center justify-center bg-white rounded-xl p-3 mb-3" id="qrHolder"></div>
-        <div class="font-mono text-center text-lg tracking-[0.2em] text-signal glow mb-1" id="roomCodeDisplay">— — — —</div>
+        <div class="font-mono text-center text-4xl tracking-[0.3em] text-signal glow mb-1" id="roomCodeDisplay">— — — —</div>
         <p class="text-center text-[11px] text-muted mb-4">Scan with your phone's camera app to open &amp; join instantly.</p>
         <div class="flex gap-2">
           <button id="copyLinkBtn" class="flex-1 bg-panel2 hover:bg-line border border-line rounded-lg py-2 text-xs font-display font-600 transition">Copy Link</button>
@@ -180,12 +180,20 @@
 (function () {
   const API = 'https://jsonblob.com/api/jsonBlob';
   const LS_ROOM = 'relay_room_id';
+  const LS_CODE = 'relay_room_code';
+  const LS_DIR = 'relay_dir_id';
   const LS_DEVICE = 'relay_device_name';
+  const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O/1/I — easy to type, hard to misread
 
   const $ = (id) => document.getElementById(id);
   const uid = () => Math.random().toString(36).slice(2, 10);
+  function genCode(len = 4) {
+    let s = '';
+    for (let i = 0; i < len; i++) s += CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)];
+    return s;
+  }
 
-  let state = { room: null, data: null, deviceName: null, pollTimer: null };
+  let state = { room: null, roomCode: null, dirId: null, data: null, deviceName: null, pollTimer: null };
 
   // ---------- Toast ----------
   function toast(msg, tone = 'default') {
@@ -235,19 +243,23 @@
   function boot() {
     state.deviceName = localStorage.getItem(LS_DEVICE);
     const url = new URL(window.location.href);
-    const urlRoom = url.searchParams.get('room');
-    const savedRoom = localStorage.getItem(LS_ROOM);
-    state.room = urlRoom || savedRoom || null;
+    const urlCode = url.searchParams.get('room');
+    const urlDir = url.searchParams.get('dir');
 
-    if (!state.deviceName) {
-      show('onboarding');
+    if (!state.deviceName) { show('onboarding'); return; }
+
+    if (urlCode && urlDir) {
+      // Came in via a scanned QR / shared link — resolve straight away, no typing.
+      enterRoomByCode(urlCode, urlDir, /*silent*/ true);
       return;
     }
-    if (!state.room) {
-      show('roomEntry');
+    const savedRoom = localStorage.getItem(LS_ROOM);
+    if (savedRoom) {
+      // Returning device — reconnect directly to the known room.
+      enterRoomDirect(savedRoom, localStorage.getItem(LS_CODE), localStorage.getItem(LS_DIR), /*silent*/ true);
       return;
     }
-    enterRoom(state.room, /*silent*/ true);
+    show('roomEntry');
   }
 
   function show(sectionId) {
@@ -256,23 +268,34 @@
   }
 
   // ---------- Room lifecycle ----------
-  async function enterRoom(id, silent = false) {
+  function persistRoom(fullId, code, dirId) {
+    localStorage.setItem(LS_ROOM, fullId);
+    if (code) localStorage.setItem(LS_CODE, code);
+    if (dirId) localStorage.setItem(LS_DIR, dirId);
+    const url = new URL(window.location.href);
+    if (code && dirId) { url.searchParams.set('room', code); url.searchParams.set('dir', dirId); }
+    window.history.replaceState({}, '', url);
+  }
+
+  function onRoomEntered(fullId, code, dirId) {
+    state.room = fullId;
+    state.roomCode = code || null;
+    state.dirId = dirId || null;
+    renderRoom();
+    show('mainApp');
+    $('roomChip').classList.remove('hidden');
+    $('roomChip').classList.add('flex');
+    $('roomChipText').textContent = code || fullId.slice(0, 8);
+  }
+
+  async function enterRoomDirect(fullId, code, dirId, silent = false) {
     try {
-      const data = await apiGet(id);
-      state.room = id;
-      state.data = data;
-      localStorage.setItem(LS_ROOM, id);
-      const url = new URL(window.location.href);
-      url.searchParams.set('room', id);
-      window.history.replaceState({}, '', url);
-      renderRoom();
-      show('mainApp');
-      $('roomChip').classList.remove('hidden');
-      $('roomChip').classList.add('flex');
-      $('roomChipText').textContent = id;
+      state.data = await apiGet(fullId);
+      persistRoom(fullId, code, dirId);
+      onRoomEntered(fullId, code, dirId);
     } catch (e) {
       if (!silent) {
-        $('roomEntryError').textContent = 'Could not find that room. Check the code and try again.';
+        $('roomEntryError').textContent = 'Could not find that room.';
         $('roomEntryError').classList.remove('hidden');
       } else {
         localStorage.removeItem(LS_ROOM);
@@ -281,11 +304,53 @@
     }
   }
 
+  async function enterRoomByCode(code, dirId, silent = false) {
+    try {
+      const dir = await apiGet(dirId);
+      const fullId = dir[code.toUpperCase()];
+      if (!fullId) throw new Error('notfound');
+      await enterRoomDirect(fullId, code.toUpperCase(), dirId, silent);
+    } catch (e) {
+      if (!silent) {
+        $('roomEntryError').textContent = 'That code didn\'t match anything. Double-check it, or scan the QR instead.';
+        $('roomEntryError').classList.remove('hidden');
+      } else {
+        show('roomEntry');
+      }
+    }
+  }
+
+  async function ensureDirectory() {
+    let dirId = localStorage.getItem(LS_DIR);
+    if (dirId) {
+      try { await apiGet(dirId); return dirId; } catch (e) { /* fall through and make a new one */ }
+    }
+    dirId = await apiCreate({});
+    localStorage.setItem(LS_DIR, dirId);
+    return dirId;
+  }
+
+  async function registerShortCode(dirId, fullId) {
+    let code, dir;
+    for (let i = 0; i < 6; i++) {
+      dir = await apiGet(dirId).catch(() => ({}));
+      code = genCode();
+      if (!dir[code]) break;
+    }
+    dir[code] = fullId;
+    await apiPut(dirId, dir);
+    return code;
+  }
+
   async function createRoom() {
     $('createRoomBtn').textContent = 'Creating…';
     try {
-      const id = await apiCreate(emptyRoomData());
-      await enterRoom(id);
+      const dirId = await ensureDirectory();
+      const fullId = await apiCreate(emptyRoomData());
+      const code = await registerShortCode(dirId, fullId);
+      state.data = emptyRoomData();
+      persistRoom(fullId, code, dirId);
+      onRoomEntered(fullId, code, dirId);
       toast('New relay created', 'ok');
     } catch (e) {
       toast('Could not create a room — check your connection', 'danger');
@@ -295,11 +360,14 @@
 
   function leaveRoom() {
     localStorage.removeItem(LS_ROOM);
+    localStorage.removeItem(LS_CODE);
     const url = new URL(window.location.href);
     url.searchParams.delete('room');
+    url.searchParams.delete('dir');
     window.history.replaceState({}, '', url);
     stopAutoSync();
     state.room = null;
+    state.roomCode = null;
     state.data = null;
     show('roomEntry');
   }
@@ -355,13 +423,22 @@
     renderNote();
   }
 
+  function shareUrl() {
+    const url = new URL(window.location.href);
+    if (state.roomCode && state.dirId) {
+      url.searchParams.set('room', state.roomCode);
+      url.searchParams.set('dir', state.dirId);
+    } else {
+      url.searchParams.set('room', state.room);
+    }
+    return url.toString();
+  }
+
   function renderQR() {
-    $('roomCodeDisplay').textContent = state.room;
+    $('roomCodeDisplay').textContent = state.roomCode || state.room.slice(0, 8).toUpperCase();
     const holder = $('qrHolder');
     holder.innerHTML = '';
-    const url = new URL(window.location.href);
-    url.searchParams.set('room', state.room);
-    new QRCode(holder, { text: url.toString(), width: 168, height: 168, colorDark: '#12161B', colorLight: '#ffffff' });
+    new QRCode(holder, { text: shareUrl(), width: 168, height: 168, colorDark: '#12161B', colorLight: '#ffffff' });
   }
 
   function renderFeed() {
@@ -435,10 +512,29 @@
 
   $('createRoomBtn').onclick = createRoom;
   $('joinRoomBtn').onclick = () => {
-    const v = $('joinCodeInput').value.trim();
-    if (!v) return;
+    const raw = $('joinCodeInput').value.trim();
+    if (!raw) return;
     $('roomEntryError').classList.add('hidden');
-    enterRoom(v);
+
+    // Pasted a full link? Pull the room + dir straight out of it.
+    if (/^https?:\/\//i.test(raw)) {
+      try {
+        const u = new URL(raw);
+        const code = u.searchParams.get('room');
+        const dir = u.searchParams.get('dir');
+        if (code && dir) { enterRoomByCode(code, dir); return; }
+        if (code) { enterRoomDirect(code, null, null); return; }
+      } catch (e) { /* not a valid URL, fall through */ }
+    }
+
+    // Otherwise treat it as a short code, resolved via this device's known directory.
+    const dirId = localStorage.getItem(LS_DIR);
+    if (!dirId) {
+      $('roomEntryError').textContent = 'This device hasn\'t connected before — scan the QR code (or paste the full link) once to link it, then short codes will work here too.';
+      $('roomEntryError').classList.remove('hidden');
+      return;
+    }
+    enterRoomByCode(raw, dirId);
   };
   $('joinCodeInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('joinRoomBtn').click(); });
 
@@ -465,9 +561,7 @@
   };
 
   $('copyLinkBtn').onclick = () => {
-    const url = new URL(window.location.href);
-    url.searchParams.set('room', state.room);
-    navigator.clipboard.writeText(url.toString());
+    navigator.clipboard.writeText(shareUrl());
     toast('Link copied');
   };
 
